@@ -24,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: ['6.6.93', '6.12.30', '6.14.4']
+        kernel: ['6.10.14']
         driver:
           - rtl8192eu
           - rtl8723bu
