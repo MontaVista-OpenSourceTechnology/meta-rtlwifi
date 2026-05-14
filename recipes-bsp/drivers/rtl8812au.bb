@@ -6,16 +6,18 @@ FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 inherit module
 
 SRC_URI = " \
-    git://github.com/morrownr/8812au-20210820.git;protocol=https;branch=main \
+    git://github.com/EmbeddedAndroid/8812au-20210820.git;protocol=https;branch=embeddedandroid \
     file://0001-Use-modules_install-as-wanted-by-yocto.patch \
 "
 
-# 9704072d is the last good commit before upstream PR #62 (Apr 2026)
-# introduced the same undefined _FW_UNDER_SURVEY reference seen in
-# rtl8821au's PR #198. Includes upstream's kernel 6.13 / 6.14 fixes.
-SRCREV = "9704072df4d75cedf8d622cf2a483aef05109e41"
+# Track an EmbeddedAndroid fork of morrownr/8812au-20210820. The
+# 'embeddedandroid' branch starts from upstream commit 9704072d
+# (Sep 2025) -- the last good revision before upstream PR #62
+# introduced an undefined _FW_UNDER_SURVEY identifier -- and
+# carries kernel 6.16/6.17/6.18 compat patches on top.
+SRCREV = "93079f26e96d61ec0506ba725c333c41f2b155be"
 
-PV = "5.13.6-git+2025.09"
+PV = "5.13.6-git+2026.05"
 S = "${WORKDIR}/git"
 
 EXTRA_OEMAKE:append = " KSRC=${STAGING_KERNEL_DIR}"
