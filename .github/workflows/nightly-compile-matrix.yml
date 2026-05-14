@@ -114,15 +114,287 @@ jobs:
                KBUILD_MODPOST_WARN=1 \
                -j"$(nproc)" modules
 
+      - name: modinfo + depmod -n
+        # Validate module metadata (license tag, version, USB id table,
+        # parameters, vermagic) and that the dependency wiring resolves
+        # cleanly. depmod -n is a dry-run that exits non-zero if symbols
+        # don't satisfy. Cheap; runs in seconds.
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+          # The driver Makefiles produce one .ko named after MODULE_NAME
+          # which doesn't always match the recipe name (rtl8723bu -> 8723bu.ko
+          # etc.). Pick up every .ko produced.
+          KOS=( drivers/${{ matrix.driver }}/*.ko )
+          if [ ${#KOS[@]} -eq 0 ]; then
+            echo "No .ko produced; nothing to inspect" >&2
+            exit 1
+          fi
+          for ko in "${KOS[@]}"; do
+            echo ">>> modinfo $ko"
+            modinfo "$ko"
+            echo
+          done
+          # depmod -n -b <dir> reads modules from <dir>/lib/modules/<kver>/
+          # so stage the .ko in that layout, then dry-run-check that
+          # dependencies resolve against the kernel's Module.symvers.
+          KVER=$(make -sC "$GITHUB_WORKSPACE/kernels/linux-${{ matrix.kernel }}" kernelrelease)
+          STAGE="$RUNNER_TEMP/stage"
+          MODDIR="$STAGE/lib/modules/$KVER"
+          mkdir -p "$MODDIR/kernel/drivers/net/wireless"
+          cp "${KOS[@]}" "$MODDIR/kernel/drivers/net/wireless/"
+          cp "$GITHUB_WORKSPACE/kernels/linux-${{ matrix.kernel }}/System.map" \
+             "$MODDIR/" 2>/dev/null || true
+          echo ">>> depmod -n -b $STAGE $KVER"
+          depmod -n -b "$STAGE" "$KVER" > "$RUNNER_TEMP/depmod.out"
+          tail -20 "$RUNNER_TEMP/depmod.out"
+          # Surface unresolved-symbol warnings to humans without failing
+          # the build (Module.symvers is empty from modules_prepare-only,
+          # so most external-symbol checks are tautologically empty here).
+          if grep -i "needs unknown symbol" "$RUNNER_TEMP/depmod.out"; then
+            echo "::warning::depmod reported unresolved symbols"
+          fi
+
+  static-analysis:
+    # Run sparse over every driver's source. Single kernel target since
+    # sparse cares about the C, not about kernel API drift.
+    name: sparse (${{ matrix.driver }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - rtl8192eu
+          - rtl8723bu
+          - rtl8723du
+          - rtl8812au
+          - rtl8814au
+          - rtl8821au
+          - rtl8821cu
+          - rtl88x2bu
+    steps:
+      - name: Install build deps + sparse
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev kmod \
+            cpio rsync xz-utils sparse
+
+      - name: Cache prepared kernel tree (6.12 LTS)
+        uses: actions/cache@v4
+        with:
+          path: kernels/linux-6.12.30
+          key: kernel-prepared-6.12.30-v2
+
+      - name: Download and prepare kernel 6.12.30
+        run: |
+          set -eo pipefail
+          mkdir -p kernels
+          KDIR="kernels/linux-6.12.30"
+          if [ -f "$KDIR/.prepared" ]; then exit 0; fi
+          curl -fLo "kernels/linux-6.12.30.tar.xz" \
+            "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.30.tar.xz"
+          tar -xf "kernels/linux-6.12.30.tar.xz" -C kernels
+          make -C "$KDIR" -j"$(nproc)" defconfig >/dev/null
+          "$KDIR/scripts/config" --file "$KDIR/.config" \
+            -e CFG80211 -e MAC80211 -e WIRELESS -e WLAN \
+            -e USB -e USB_SUPPORT -d WERROR
+          make -C "$KDIR" -j"$(nproc)" olddefconfig >/dev/null
+          make -C "$KDIR" -j"$(nproc)" modules_prepare >/dev/null
+          touch "$KDIR/.prepared"
+
+      - uses: actions/checkout@v4
+        with:
+          path: meta-rtlwifi
+
+      - name: Clone driver ${{ matrix.driver }} at pinned SRCREV
+        run: |
+          set -eo pipefail
+          RECIPE="meta-rtlwifi/recipes-bsp/drivers/${{ matrix.driver }}.bb"
+          URL=$(awk -F'[ =]+' '/^SRC_URI[[:space:]]*=/ { capture=1 } capture { match($0, /git:\/\/[^ ;"]+/); if (RSTART) { print substr($0, RSTART+6, RLENGTH-6); exit } }' "$RECIPE")
+          BRANCH=$(grep -oE 'branch=[^ ;"]+' "$RECIPE" | head -1 | cut -d= -f2)
+          SRCREV=$(awk -F'"' '/^SRCREV[[:space:]]*=/ { print $2; exit }' "$RECIPE")
+          git clone "https://$URL" "drivers/${{ matrix.driver }}"
+          git -C "drivers/${{ matrix.driver }}" checkout "$SRCREV"
+
+      - name: Build with sparse
+        run: |
+          set -eo pipefail
+          cd "drivers/${{ matrix.driver }}"
+          # C=2 forces sparse on every file; CHECK=sparse names the tool.
+          # We capture, then summarise; sparse warnings don't fail the
+          # build unless egregious to keep this informational while the
+          # warning baseline is established.
+          make KSRC="$GITHUB_WORKSPACE/kernels/linux-6.12.30" \
+               KBUILD_MODPOST_WARN=1 \
+               C=2 CHECK="sparse" \
+               -j"$(nproc)" modules \
+            2>&1 | tee "$RUNNER_TEMP/sparse.log"
+          echo
+          echo "=== Sparse summary ==="
+          grep -E "warning:|error:" "$RUNNER_TEMP/sparse.log" \
+            | awk -F: '{print $4}' | sort | uniq -c | sort -rn | head -20 \
+            || true
+
+  qemu-insmod:
+    # Actually load every built .ko into a running kernel under QEMU
+    # and assert that module init returns 0. Single kernel target
+    # (6.12 LTS walnascar) for cost reasons; per-kernel insmod would
+    # require building a bzImage per kernel which is multi-hour.
+    name: qemu insmod (${{ matrix.driver }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        driver:
+          - rtl8192eu
+          - rtl8723bu
+          - rtl8723du
+          - rtl8812au
+          - rtl8814au
+          - rtl8821au
+          - rtl8821cu
+          - rtl88x2bu
+    steps:
+      - name: Install build deps + qemu + busybox
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev kmod \
+            cpio rsync xz-utils qemu-system-x86 busybox-static
+
+      - name: Cache built kernel image + module tree (6.12 LTS)
+        uses: actions/cache@v4
+        with:
+          path: kernels/linux-6.12.30
+          key: kernel-bzimage-6.12.30-v1
+
+      - name: Build kernel image (6.12.30, tinyconfig + wifi)
+        run: |
+          set -eo pipefail
+          mkdir -p kernels
+          KDIR="kernels/linux-6.12.30"
+          if [ -f "$KDIR/.bzimage-built" ]; then
+            echo "bzImage already in cache"
+            exit 0
+          fi
+          if [ ! -d "$KDIR" ]; then
+            curl -fLo "kernels/linux-6.12.30.tar.xz" \
+              "https://cdn.kernel.org/pub/linux/kernel/v6.x/linux-6.12.30.tar.xz"
+            tar -xf "kernels/linux-6.12.30.tar.xz" -C kernels
+          fi
+          # tinyconfig + just enough to boot a kernel that can load
+          # WiFi modules. Keep it small so the bzImage build fits in
+          # a few minutes on a GHA runner.
+          make -C "$KDIR" -j"$(nproc)" tinyconfig >/dev/null
+          "$KDIR/scripts/config" --file "$KDIR/.config" \
+            -e 64BIT -e SMP \
+            -e PRINTK -e EARLY_PRINTK -e SERIAL_8250 -e SERIAL_8250_CONSOLE \
+            -e BLK_DEV_INITRD -e RD_GZIP \
+            -e MODULES -e MODULE_UNLOAD \
+            -e CFG80211 -e MAC80211 -e WIRELESS -e WLAN \
+            -e USB -e USB_SUPPORT -e USB_XHCI_HCD \
+            -e DEVTMPFS -e DEVTMPFS_MOUNT \
+            -e NET -e PACKET -e UNIX -e INET \
+            -e TTY -e VT -e VT_CONSOLE \
+            -e BINFMT_ELF -e BINFMT_SCRIPT \
+            -e PROC_FS -e SYSFS \
+            -e PCI -e ACPI \
+            -d WERROR
+          make -C "$KDIR" -j"$(nproc)" olddefconfig >/dev/null
+          make -C "$KDIR" -j"$(nproc)" bzImage modules_prepare
+          touch "$KDIR/.bzimage-built"
+
+      - uses: actions/checkout@v4
+        with:
+          path: meta-rtlwifi
+
+      - name: Clone + build driver at pinned SRCREV
+        run: |
+          set -eo pipefail
+          RECIPE="meta-rtlwifi/recipes-bsp/drivers/${{ matrix.driver }}.bb"
+          URL=$(awk -F'[ =]+' '/^SRC_URI[[:space:]]*=/ { capture=1 } capture { match($0, /git:\/\/[^ ;"]+/); if (RSTART) { print substr($0, RSTART+6, RLENGTH-6); exit } }' "$RECIPE")
+          BRANCH=$(grep -oE 'branch=[^ ;"]+' "$RECIPE" | head -1 | cut -d= -f2)
+          SRCREV=$(awk -F'"' '/^SRCREV[[:space:]]*=/ { print $2; exit }' "$RECIPE")
+          git clone "https://$URL" "drivers/${{ matrix.driver }}"
+          git -C "drivers/${{ matrix.driver }}" checkout "$SRCREV"
+          cd "drivers/${{ matrix.driver }}"
+          make KSRC="$GITHUB_WORKSPACE/kernels/linux-6.12.30" \
+               KBUILD_MODPOST_WARN=1 -j"$(nproc)" modules
+
+      - name: Build initramfs with the driver
+        run: |
+          set -eo pipefail
+          shopt -s nullglob
+          ROOT=$(mktemp -d)
+          mkdir -p "$ROOT"/{bin,sbin,proc,sys,dev,lib/modules}
+          # Bundle busybox-static; it gives us /bin/sh, insmod, dmesg.
+          install -m 0755 /usr/bin/busybox "$ROOT/bin/busybox"
+          for cmd in sh insmod dmesg mount poweroff echo cat; do
+            ln -s busybox "$ROOT/bin/$cmd"
+          done
+          cp drivers/${{ matrix.driver }}/*.ko "$ROOT/lib/modules/"
+          cat > "$ROOT/init" <<'INIT'
+          #!/bin/sh
+          export PATH=/bin:/sbin
+          mount -t proc proc /proc
+          mount -t sysfs sys /sys
+          mount -t devtmpfs dev /dev
+          echo "=== running insmod on each driver .ko ==="
+          rc=0
+          for m in /lib/modules/*.ko; do
+              echo "--- insmod $m ---"
+              if insmod "$m"; then
+                  echo "  insmod OK: $m"
+              else
+                  echo "  insmod FAILED: $m" >&2
+                  rc=1
+              fi
+          done
+          echo "DRIVER_INSMOD_RESULT=$rc"
+          # `reboot -f` does LINUX_REBOOT_CMD_RESTART, which qemu's
+          # -no-reboot catches and exits with. `poweroff` on this
+          # tinyconfig falls back to halt and qemu sits forever.
+          reboot -f
+          INIT
+          chmod +x "$ROOT/init"
+          ( cd "$ROOT" && find . | cpio -o -H newc | gzip -9 ) > initramfs.cpio.gz
+          ls -la initramfs.cpio.gz
+
+      - name: Boot kernel under QEMU and observe insmod
+        timeout-minutes: 5
+        run: |
+          set -eo pipefail
+          qemu-system-x86_64 \
+            -no-reboot -nographic \
+            -m 256 -smp 2 \
+            -kernel kernels/linux-6.12.30/arch/x86/boot/bzImage \
+            -initrd initramfs.cpio.gz \
+            -append 'console=ttyS0 panic=1' \
+            2>&1 | tee qemu.log
+          # The init script prints DRIVER_INSMOD_RESULT=0 on success.
+          if grep -q "DRIVER_INSMOD_RESULT=0" qemu.log; then
+            echo "::notice::all .ko modules insmod-loaded cleanly"
+          else
+            echo "::error::insmod failed inside qemu (see qemu.log)"
+            exit 1
+          fi
+
   summary:
     name: matrix summary
-    needs: compile
+    needs: [compile, static-analysis, qemu-insmod]
     if: always()
     runs-on: ubuntu-22.04
     steps:
       - name: Report
         env:
-          RESULT: ${{ needs.compile.result }}
+          COMPILE: ${{ needs.compile.result }}
+          SPARSE: ${{ needs.static-analysis.result }}
+          QEMU: ${{ needs.qemu-insmod.result }}
         run: |
-          echo "Compile matrix result: $RESULT"
-          if [ "$RESULT" != "success" ]; then exit 1; fi
+          echo "compile        : $COMPILE"
+          echo "static-analysis: $SPARSE"
+          echo "qemu-insmod    : $QEMU"
+          for r in "$COMPILE" "$SPARSE" "$QEMU"; do
+            if [ "$r" != "success" ]; then exit 1; fi
+          done
