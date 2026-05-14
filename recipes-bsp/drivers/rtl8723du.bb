@@ -3,13 +3,13 @@ DESCRIPTION = "RTL8723DU kernel driver"
 LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-only;md5=801f80980d171dd6425610833a22dbe6"
 
-FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
-SRCREV = "efcaffbd60e8114b5338f51cec8b3f7b6ef51045"
-SRC_URI = "\
-    git://github.com/lwfinger/rtl8723du;protocol=https;branch=master \
-    file://0001-use-modules_install-as-wanted-by-yocto.patch \
-"
-PV = "5.13.4-git"
+# Track a maintained fork of the (obsolete) lwfinger/rtl8723du driver
+# under github.com/EmbeddedAndroid. The 'embeddedandroid' branch carries
+# Yocto-specific Makefile glue (modules_install target) and per-kernel
+# compile fixes on top of lwfinger's last upstream commit.
+SRC_URI = "git://github.com/EmbeddedAndroid/rtl8723du;protocol=https;branch=embeddedandroid"
+SRCREV = "5bd46faeedae647bca25e1a6a8d4de9bcf963899"
+PV = "5.13.4-git+2026.05"
 
 DEPENDS = "virtual/kernel"
 
