@@ -9,7 +9,7 @@ LIC_FILES_CHKSUM = "file://Kconfig;md5=ce4c7adf40ddcf6cfca7ee2b333165f0"
 # upstream maintainer hasn't picked up.
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 PV = "4.3.6.11-git+2026.05"
-SRCREV = "1c03fb14f015482054b5be4efc6d3e39f7f1c944"
+SRCREV = "6b4047755f1a6e4b6caa68b74d71abf699041811"
 SRC_URI = "git://github.com/EmbeddedAndroid/rtl8723bu.git;protocol=https;branch=embeddedandroid \
            file://0002-realtek-Disable-IPS-mode.patch "
 
