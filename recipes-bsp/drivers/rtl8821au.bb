@@ -1,6 +1,6 @@
 SUMMARY = "Linux driver for RTL8811AU and RTL8821AU chipsets"
 LICENSE = "GPL-2.0-only"
-LIC_FILES_CHKSUM = "file://LICENSE;md5=ab842b299d0a92fb908d6eb122cd6de9"
+LIC_FILES_CHKSUM = "file://LICENSE;md5=b1918d7d89f091725a3188ff95f7c72b"
 FILESEXTRAPATHS:prepend := "${THISDIR}/${PN}:"
 
 inherit module
@@ -10,8 +10,11 @@ SRC_URI = " \
 	file://0001-Use-modules_install-as-wanted-by-yocto.patch \
 "
 
-SRCREV = "a133274b0532c17318e8790b771566f4a6b12b7c"
-PV = "5.12.5.2-git"
+# 250cdad is the last good commit before upstream PR #198 (Apr 2026)
+# introduced an undefined _FW_UNDER_SURVEY reference. Includes the
+# kernel 6.14 support patch from Apr 2025.
+SRCREV = "250cdad41275444b935f788cabae391b9f4d5bc7"
+PV = "5.12.5.2-git+2025.09"
 
 S = "${WORKDIR}/git"
 

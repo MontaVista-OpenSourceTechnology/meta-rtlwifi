@@ -5,6 +5,8 @@ Subject: [PATCH 2/2] realtek: Disable IPS mode
 
 Disabling IPS mode increased the bluetooth range
 
+Upstream-Status: Inappropriate [embedded specific]
+
 Signed-off-by: Patrice Chotard <patrice.chotard@st.com>
 ---
  include/autoconf.h | 2 +-
