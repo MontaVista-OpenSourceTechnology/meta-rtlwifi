@@ -4,11 +4,11 @@ LICENSE = "GPL-2.0-only"
 LIC_FILES_CHKSUM ?= "file://${COMMON_LICENSE_DIR}/GPL-2.0-only;md5=801f80980d171dd6425610833a22dbe6"
 
 SRC_URI = "git://github.com/Mange/rtl8192eu-linux-driver.git;protocol=https;branch=realtek-4.4.x"
-SRCREV = "528ae31705764d78cc117abd604d9b799bd52543"
+SRCREV = "9c0511420da11214c68d8591b19459ba10892aab"
 
 S = "${WORKDIR}/git"
 
-PV = "4.4.1-git"
+PV = "4.4.1-git+2026.03"
 
 DEPENDS = "virtual/kernel"
 
