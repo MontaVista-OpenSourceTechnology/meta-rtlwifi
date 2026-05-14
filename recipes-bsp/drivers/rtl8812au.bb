@@ -10,9 +10,12 @@ SRC_URI = " \
     file://0001-Use-modules_install-as-wanted-by-yocto.patch \
 "
 
-SRCREV = "c0efee9cd121d9f0c815d9771475f76339a8f7d3"
+# 9704072d is the last good commit before upstream PR #62 (Apr 2026)
+# introduced the same undefined _FW_UNDER_SURVEY reference seen in
+# rtl8821au's PR #198. Includes upstream's kernel 6.13 / 6.14 fixes.
+SRCREV = "9704072df4d75cedf8d622cf2a483aef05109e41"
 
-PV = "5.13.6-git"
+PV = "5.13.6-git+2025.09"
 S = "${WORKDIR}/git"
 
 EXTRA_OEMAKE:append = " KSRC=${STAGING_KERNEL_DIR}"
