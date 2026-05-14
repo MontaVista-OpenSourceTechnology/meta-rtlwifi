@@ -1,0 +1,138 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs for the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  parse:
+    name: parse (${{ matrix.poky_branch }})
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # poky-the-distro covers up to walnascar; whinlatter+ no longer
+        # publish a poky combo repo, so newer-release CI would use
+        # openembedded-core directly.
+        poky_branch: [kirkstone, scarthgap, styhead, walnascar]
+    steps:
+      - name: Checkout meta-rtlwifi
+        uses: actions/checkout@v4
+        with:
+          path: meta-rtlwifi
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY"
+          df -h
+
+      - name: Cache poky checkout
+        uses: actions/cache@v4
+        with:
+          path: poky
+          key: poky-${{ matrix.poky_branch }}-${{ hashFiles('meta-rtlwifi/conf/layer.conf') }}
+          restore-keys: |
+            poky-${{ matrix.poky_branch }}-
+
+      - name: Clone poky
+        run: |
+          if [ ! -d poky/.git ]; then
+            git clone --depth 1 --branch ${{ matrix.poky_branch }} \
+              https://git.yoctoproject.org/poky poky
+          else
+            git -C poky fetch --depth 1 origin ${{ matrix.poky_branch }}
+            git -C poky checkout -B ${{ matrix.poky_branch }} origin/${{ matrix.poky_branch }}
+          fi
+
+      - name: Install Yocto host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gawk wget git diffstat unzip texinfo gcc build-essential chrpath \
+            socat cpio python3 python3-pip python3-pexpect xz-utils debianutils \
+            iputils-ping python3-git python3-jinja2 python3-subunit zstd liblz4-tool \
+            file locales libacl1
+          sudo locale-gen en_US.UTF-8
+
+      - name: Parse the layer
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          set -eo pipefail
+          cd poky
+          source oe-init-build-env build
+          cat >> conf/local.conf <<'EOF'
+          MACHINE = "qemux86-64"
+          BB_NUMBER_THREADS = "2"
+          PARALLEL_MAKE = "-j 2"
+          INHERIT += "rm_work"
+          CONF_VERSION = "2"
+          EOF
+          bitbake-layers add-layer "$GITHUB_WORKSPACE/meta-rtlwifi"
+          bitbake-layers show-layers
+          bitbake -p
+
+      - name: Fetch all recipes
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          set -eo pipefail
+          cd poky
+          source oe-init-build-env build
+          bitbake -c fetch -k \
+            rtl8192eu rtl8723bu rtl8723du rtl8812au rtl8814au \
+            rtl8821au rtl8821cu rtl88x2bu
+
+  check-layer:
+    # Run yocto-check-layer against scarthgap LTS to verify the layer follows
+    # current best practice. Failures here block merges so the layer stays
+    # compatible with downstream users.
+    name: yocto-check-layer (scarthgap)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: meta-rtlwifi
+
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/share/boost \
+                      "$AGENT_TOOLSDIRECTORY"
+
+      - name: Clone poky (scarthgap)
+        run: git clone --depth 1 --branch scarthgap https://git.yoctoproject.org/poky poky
+
+      - name: Install Yocto host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gawk wget git diffstat unzip texinfo gcc build-essential chrpath \
+            socat cpio python3 python3-pip python3-pexpect xz-utils debianutils \
+            iputils-ping python3-git python3-jinja2 python3-subunit zstd liblz4-tool \
+            file locales libacl1
+          sudo locale-gen en_US.UTF-8
+
+      - name: yocto-check-layer
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          set -eo pipefail
+          cd poky
+          # oe-init-build-env prepends scripts/ to PATH and cds into build/.
+          source oe-init-build-env build
+          # -n: run a "dry" pass that exercises parse/signature checks
+          # without doing a full image build.
+          yocto-check-layer -n "$GITHUB_WORKSPACE/meta-rtlwifi"
