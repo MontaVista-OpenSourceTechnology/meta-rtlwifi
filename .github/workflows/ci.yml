@@ -104,7 +104,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        release: [whinlatter, wrynose]
+        include:
+          # bitbake versions itself independently of Yocto release
+          # names, so each entry maps the oe-core branch to the
+          # bitbake-the-tool branch that release expects.
+          - release: whinlatter
+            bitbake: '2.16'
+          - release: wrynose
+            bitbake: '2.18'
     steps:
       - name: Checkout meta-rtlwifi
         uses: actions/checkout@v4
@@ -122,9 +129,9 @@ jobs:
           git clone --depth 1 --branch ${{ matrix.release }} \
             https://git.openembedded.org/openembedded-core oe-core
 
-      - name: Clone bitbake (${{ matrix.release }})
+      - name: Clone bitbake (${{ matrix.bitbake }})
         run: |
-          git clone --depth 1 --branch ${{ matrix.release }} \
+          git clone --depth 1 --branch ${{ matrix.bitbake }} \
             https://git.openembedded.org/bitbake oe-core/bitbake
 
       - name: Install Yocto host dependencies
