@@ -10,7 +10,7 @@ on:
       kernels:
         description: 'Space-separated kernel versions to test'
         required: false
-        default: '6.6.93 6.12.30 6.14.4'
+        default: '6.6.93 6.12.30 6.14.4 6.16.12 6.18.29'
 
 # Don't pile up nightly runs if one is already in progress.
 concurrency:
@@ -24,7 +24,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: ['6.6.93', '6.12.30', '6.14.4']
+        # Kernels covered:
+        #   6.6  - scarthgap LTS
+        #   6.12 - walnascar
+        #   6.14 - mid-stable, exercises the cfg80211 punct_bitmap revert
+        #   6.16 - whinlatter
+        #   6.18 - wrynose LTS
+        kernel: ['6.6.93', '6.12.30', '6.14.4', '6.16.12', '6.18.29']
         driver:
           - rtl8192eu
           - rtl8723bu
