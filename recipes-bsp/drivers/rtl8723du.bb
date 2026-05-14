@@ -8,7 +8,7 @@ LIC_FILES_CHKSUM = "file://${COMMON_LICENSE_DIR}/GPL-2.0-only;md5=801f80980d171d
 # Yocto-specific Makefile glue (modules_install target) and per-kernel
 # compile fixes on top of lwfinger's last upstream commit.
 SRC_URI = "git://github.com/EmbeddedAndroid/rtl8723du;protocol=https;branch=embeddedandroid"
-SRCREV = "5bd46faeedae647bca25e1a6a8d4de9bcf963899"
+SRCREV = "83743042b778ac0b07b068a8e870ecc97d35ec4f"
 PV = "5.13.4-git+2026.05"
 
 DEPENDS = "virtual/kernel"
