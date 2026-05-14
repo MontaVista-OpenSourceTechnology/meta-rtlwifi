@@ -24,7 +24,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kernel: ['6.6.93', '6.12.30', '6.14.4']
+        # Release branch: narrowed to scarthgap's linux-yocto kernel
+        # major (6.6). master keeps the broader matrix.
+        kernel: ['6.6.93']
         driver:
           - rtl8192eu
           - rtl8723bu

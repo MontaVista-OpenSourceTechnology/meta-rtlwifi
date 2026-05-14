@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [master, main]
+    branches: [scarthgap]
   pull_request:
   workflow_dispatch:
 
@@ -18,10 +18,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # poky-the-distro covers up to walnascar; whinlatter+ no longer
-        # publish a poky combo repo, so newer-release CI would use
-        # openembedded-core directly.
-        poky_branch: [kirkstone, scarthgap, styhead, walnascar]
+        # Release branch: only test against the matching poky branch.
+        poky_branch: [scarthgap]
     steps:
       - name: Checkout meta-rtlwifi
         uses: actions/checkout@v4
