@@ -1,0 +1,122 @@
+name: nightly-compile-matrix
+
+on:
+  schedule:
+    # 04:17 UTC daily. Off the hour so we don't hammer github.com or
+    # cdn.kernel.org alongside everyone else.
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+    inputs:
+      kernels:
+        description: 'Space-separated kernel versions to test'
+        required: false
+        default: '6.6.93 6.12.30 6.14.4'
+
+# Don't pile up nightly runs if one is already in progress.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  compile:
+    name: ${{ matrix.driver }} @ ${{ matrix.kernel }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel: ['6.6.93', '6.12.30', '6.14.4']
+        driver:
+          - rtl8192eu
+          - rtl8723bu
+          - rtl8723du
+          - rtl8812au
+          - rtl8814au
+          - rtl8821au
+          - rtl8821cu
+          - rtl88x2bu
+    steps:
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev kmod \
+            cpio rsync xz-utils
+
+      - name: Cache prepared kernel tree
+        uses: actions/cache@v4
+        with:
+          path: kernels/linux-${{ matrix.kernel }}
+          key: kernel-prepared-${{ matrix.kernel }}-v2
+
+      - name: Download and prepare kernel ${{ matrix.kernel }}
+        run: |
+          set -eo pipefail
+          mkdir -p kernels
+          KDIR="kernels/linux-${{ matrix.kernel }}"
+          if [ -f "$KDIR/.prepared" ]; then
+            echo "kernel ${{ matrix.kernel }} already prepared (cache hit)"
+            exit 0
+          fi
+          MAJOR="${{ matrix.kernel }}"
+          MAJOR="${MAJOR%%.*}"
+          curl -fLo "kernels/linux-${{ matrix.kernel }}.tar.xz" \
+            "https://cdn.kernel.org/pub/linux/kernel/v${MAJOR}.x/linux-${{ matrix.kernel }}.tar.xz"
+          tar -xf "kernels/linux-${{ matrix.kernel }}.tar.xz" -C kernels
+          make -C "$KDIR" -j"$(nproc)" defconfig >/dev/null
+          "$KDIR/scripts/config" --file "$KDIR/.config" \
+            -e CFG80211 -e MAC80211 -e WIRELESS -e WLAN \
+            -e USB -e USB_SUPPORT \
+            -d WERROR
+          make -C "$KDIR" -j"$(nproc)" olddefconfig >/dev/null
+          make -C "$KDIR" -j"$(nproc)" modules_prepare >/dev/null
+          touch "$KDIR/.prepared"
+
+      - name: Checkout meta-rtlwifi (for recipe SRCREVs)
+        uses: actions/checkout@v4
+        with:
+          path: meta-rtlwifi
+
+      - name: Clone driver ${{ matrix.driver }} at the recipe's pinned SRCREV
+        run: |
+          set -eo pipefail
+          RECIPE="meta-rtlwifi/recipes-bsp/drivers/${{ matrix.driver }}.bb"
+          # Pull SRC_URI and SRCREV straight out of the .bb so this CI
+          # always tracks the same upstream+revision the layer ships.
+          URL=$(awk -F'[ =]+' '
+              /^SRC_URI[[:space:]]*=/ { capture=1 }
+              capture {
+                match($0, /git:\/\/[^ ;"]+/);
+                if (RSTART) { print substr($0, RSTART+6, RLENGTH-6); exit }
+              }
+          ' "$RECIPE")
+          BRANCH=$(grep -oE 'branch=[^ ;"]+' "$RECIPE" | head -1 | cut -d= -f2)
+          SRCREV=$(awk -F'"' '/^SRCREV[[:space:]]*=/ { print $2; exit }' "$RECIPE")
+          : "${URL:?could not parse SRC_URI from $RECIPE}"
+          : "${BRANCH:?could not parse branch from $RECIPE}"
+          : "${SRCREV:?could not parse SRCREV from $RECIPE}"
+          # SRC_URI strips the protocol so we got github.com/... -> need
+          # to put a scheme back on. The recipes use protocol=https.
+          echo "driver=${{ matrix.driver }} url=https://$URL branch=$BRANCH srcrev=$SRCREV"
+          git clone "https://$URL" "drivers/${{ matrix.driver }}"
+          git -C "drivers/${{ matrix.driver }}" checkout "$SRCREV"
+
+      - name: Build ${{ matrix.driver }} against linux-${{ matrix.kernel }}
+        run: |
+          set -eo pipefail
+          cd "drivers/${{ matrix.driver }}"
+          make KSRC="$GITHUB_WORKSPACE/kernels/linux-${{ matrix.kernel }}" \
+               KBUILD_MODPOST_WARN=1 \
+               -j"$(nproc)" modules
+
+  summary:
+    name: matrix summary
+    needs: compile
+    if: always()
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Report
+        env:
+          RESULT: ${{ needs.compile.result }}
+        run: |
+          echo "Compile matrix result: $RESULT"
+          if [ "$RESULT" != "success" ]; then exit 1; fi
